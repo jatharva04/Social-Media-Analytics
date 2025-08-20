@@ -1,0 +1,70 @@
+import pandas as pd
+import re, unicodedata
+
+def clean_insta_slim(file_path: str) -> pd.DataFrame:
+    # 1. Read the raw Excel
+    df = pd.read_excel(file_path)
+
+    # --- helpers ---
+    def normalize_text(s):
+        if pd.isna(s): return ""
+        s = unicodedata.normalize("NFKC", str(s))
+        s = re.sub(r"[\u200B-\u200D\uFEFF]", "", s)  # remove zero-width
+        s = re.sub(r"\s+", " ", s).strip()
+        return s
+
+    def extract_list(pattern, s):
+        if not isinstance(s, str): return []
+        return re.findall(pattern, s, flags=re.UNICODE)
+
+    def clean_caption_text(s):
+        if not isinstance(s, str): return ""
+        s = re.sub(r"@\w+", "", s)           # remove mentions
+        s = re.sub(r"#\w+", "", s)           # remove hashtags
+        s = re.sub(r"http\S+", "", s)        # remove urls
+        s = re.sub(r"[^\w\s]", "", s)        # remove symbols
+        return re.sub(r"\s+", " ", s).strip()
+
+    # --- cleaning ---
+    df["owner_username"] = df["ownerUsername"].astype(str).str.strip().str.lower().str.lstrip("@")
+    df["owner_full_name"] = df["ownerFullName"].astype(str).map(normalize_text)
+
+    # Timestamp → IST
+    df["posted_at"] = pd.to_datetime(df["timestamp"], errors="coerce", utc=True).dt.tz_convert("Asia/Kolkata")
+    df["hour_ist"] = df["posted_at"].dt.hour
+    df["weekday_ist"] = df["posted_at"].dt.day_name()
+
+    # Caption & first comment (cleaned text)
+    df["caption_clean"] = df["caption"].map(clean_caption_text)
+    df["first_comment_clean"] = df["firstComment"].map(clean_caption_text)
+
+    # Engagement
+    df["engagement"] = df["likesCount"].fillna(0) + df["commentsCount"].fillna(0)
+
+    # Extract lists
+    df["hashtags"] = df["caption"].map(lambda x: extract_list(r"#\w+", str(x)))
+    df["mentions"] = df["caption"].map(lambda x: extract_list(r"@\w+", str(x)))
+
+    # --- slim schema ---
+    keep_cols = [
+        "owner_username", "owner_full_name", "url",
+        "caption_clean", "first_comment_clean",
+        "likesCount", "commentsCount", "engagement",
+        "hashtags", "mentions",
+        "posted_at", "hour_ist", "weekday_ist"
+    ]
+    df_slim = df[keep_cols].copy()
+    return df_slim
+
+
+df_clean = clean_insta_slim("dataset.xlsx")
+
+# Make datetime timezone-unaware for Excel
+df_clean["posted_at"] = df_clean["posted_at"].dt.tz_localize(None)
+
+# Save cleaned versions
+df_clean.to_excel("insta_cleaned_slim.xlsx", index=False)
+df_clean.to_csv("insta_cleaned_slim.csv", index=False)
+
+print("✅ Cleaning done. Files saved as insta_cleaned_slim.xlsx and insta_cleaned_slim.csv")
+df_clean.head()
